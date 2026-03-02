@@ -93,16 +93,14 @@ class TelegramUploader:
 
     async def _msg_to_reply(self):
         if self._listener.up_dest:
-            # Основна доставка — в ЛС користувача через преміум-сесію (якщо є)
-            self._up_chat_id = self._listener.user_id
-            self._up_thread_id = None
-            self._is_private = True
             # Зберігаємо дамп-канал для тихого бекапу
             self._dump_chat_id = self._listener.up_dest
-            # Використовуємо user-сесію для ЛС щоб отримати 4 GiB ліміт
-            if TgClient.IS_PREMIUM_USER and TgClient.user:
+            self._is_private = True
+            # Завантажуємо в оригінальний чат через user session (4 GiB ліміт),
+            # потім форвардимо в dump-канал. НЕ відправляємо напряму в чужий PM —
+            # user session не може писати в PM юзера без ініціації з його боку.
+            if TgClient.user:
                 self._user_session = True
-                # Ініціалізуємо _sent_msg через user-клієнт
                 self._sent_msg = await TgClient.user.get_messages(
                     chat_id=self._listener.message.chat.id,
                     message_ids=self._listener.mid,
@@ -114,8 +112,9 @@ class TelegramUploader:
                         disable_notification=True,
                     )
             else:
-                # Без преміуму — беремо оригінальне повідомлення
                 self._sent_msg = self._listener.message
+            self._up_chat_id = self._listener.message.chat.id
+            self._up_thread_id = getattr(self._listener.message, "message_thread_id", None)
         elif self._user_session:
             self._sent_msg = await TgClient.user.get_messages(
                 chat_id=self._listener.message.chat.id, message_ids=self._listener.mid
@@ -293,7 +292,7 @@ class TelegramUploader:
                     await self._upload_file(cap_mono, file_, f_path)
                     if self._listener.is_cancelled:
                         return
-                    if not self._is_corrupted:
+                    if not self._is_corrupted and self._sent_msg is not None:
                         if (
                             self._listener.is_super_chat or (
                                 self._listener.up_dest
@@ -307,6 +306,7 @@ class TelegramUploader:
                             self._msgs_dict[str(self._sent_msg.id)] = file_
                     await sleep(1)
                 except Exception as err:
+                    self._is_corrupted = True  # гарантуємо що corrupted=True при будь-якому exception
                     if isinstance(err, RetryError):
                         LOGGER.info(
                             f"Total Attempts: {err.last_attempt.attempt_number}"
