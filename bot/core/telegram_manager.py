@@ -59,6 +59,15 @@ class TgClient:
                 cls.IS_PREMIUM_USER = cls.user.me.is_premium
                 if cls.IS_PREMIUM_USER:
                     cls.MAX_SPLIT_SIZE = 4294967296  # 4 GiB — Telegram Premium upload limit
+                    LOGGER.info(
+                        f"User session started | Account: {cls.user.me.first_name} "
+                        f"| Premium: YES | MAX_SPLIT_SIZE: 4 GiB"
+                    )
+                else:
+                    LOGGER.warning(
+                        f"User session started | Account: {cls.user.me.first_name} "
+                        f"| Premium: NO — split size stays 2 GiB"
+                    )
             except Exception as e:
                 LOGGER.error(f"Failed to start client from USER_SESSION_STRING. {e}")
                 cls.IS_PREMIUM_USER = False

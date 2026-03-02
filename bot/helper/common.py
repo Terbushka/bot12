@@ -455,8 +455,10 @@ class TaskConfig:
             elif (
                 self.user_transmission or self.hybrid_leech
             ) and not self.is_super_chat:
-                self.user_transmission = False
-                self.hybrid_leech = False
+                # Не вимикаємо якщо є преміум — user_transmission потрібен для 4 GiB сплітингу
+                if not TgClient.IS_PREMIUM_USER:
+                    self.user_transmission = False
+                    self.hybrid_leech = False
             if self.split_size:
                 if self.split_size.isdigit():
                     self.split_size = int(self.split_size)
