@@ -1,0 +1,81 @@
+from pyrogram.filters import create
+from pyrogram.errors import UserNotParticipant, ChatAdminRequired, ChannelPrivate
+
+from ... import user_data, auth_chats, sudo_users
+from ...core.config_manager import Config
+from ...core.telegram_manager import TgClient
+
+
+class CustomFilters:
+    async def owner_filter(self, _, update):
+        user = update.from_user or update.sender_chat
+        return user.id == Config.OWNER_ID
+
+    owner = create(owner_filter)
+
+    async def authorized_user(self, _, update):
+        user = update.from_user or update.sender_chat
+        uid = user.id
+        chat_id = update.chat.id
+        thread_id = update.message_thread_id if update.topic_message else None
+
+        # Базова перевірка авторизації
+        base_auth = bool(
+            uid == Config.OWNER_ID
+            or (
+                uid in user_data
+                and (
+                    user_data[uid].get("AUTH", False)
+                    or user_data[uid].get("SUDO", False)
+                )
+            )
+            or (
+                chat_id in user_data
+                and user_data[chat_id].get("AUTH", False)
+                and (
+                    thread_id is None
+                    or thread_id in user_data[chat_id].get("thread_ids", [])
+                )
+            )
+            or uid in sudo_users
+            or uid in auth_chats
+            or chat_id in auth_chats
+            and (
+                auth_chats[chat_id]
+                and thread_id
+                and thread_id in auth_chats[chat_id]
+                or not auth_chats[chat_id]
+            )
+        )
+        if base_auth:
+            return True
+
+        # Перевірка членства у приватному каналі
+        if Config.PRIVATE_CHANNEL:
+            try:
+                client = TgClient.user if TgClient.user else _
+                member = await client.get_chat_member(
+                    int(Config.PRIVATE_CHANNEL), uid
+                )
+                if member.status.name not in ("BANNED", "RESTRICTED", "LEFT"):
+                    return True
+            except (UserNotParticipant, ChatAdminRequired, ChannelPrivate):
+                pass
+            except Exception:
+                pass
+
+        return False
+
+    authorized = create(authorized_user)
+
+    async def sudo_user(self, _, update):
+        user = update.from_user or update.sender_chat
+        uid = user.id
+        return bool(
+            uid == Config.OWNER_ID
+            or uid in user_data
+            and user_data[uid].get("SUDO")
+            or uid in sudo_users
+        )
+
+    sudo = create(sudo_user)
