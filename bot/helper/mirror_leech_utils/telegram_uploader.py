@@ -93,28 +93,21 @@ class TelegramUploader:
 
     async def _msg_to_reply(self):
         if self._listener.up_dest:
-            # Зберігаємо дамп-канал для тихого бекапу
-            self._dump_chat_id = self._listener.up_dest
             self._is_private = True
-            # Завантажуємо в оригінальний чат через user session (4 GiB ліміт),
-            # потім форвардимо в dump-канал. НЕ відправляємо напряму в чужий PM —
-            # user session не може писати в PM юзера без ініціації з його боку.
+            self._dump_chat_id = self._listener.up_dest
+            # Аплоуд іде НАПРЯМУ в dump channel (supergroup/channel)
+            # через user session → 4 GiB ліміт.
+            # Після аплоуду — copy_message в PM юзера (без "Переслано від").
+            self._up_chat_id = self._dump_chat_id
+            self._up_thread_id = None
             if TgClient.user:
                 self._user_session = True
-                self._sent_msg = await TgClient.user.get_messages(
-                    chat_id=self._listener.message.chat.id,
-                    message_ids=self._listener.mid,
-                )
-                if self._sent_msg is None:
-                    self._sent_msg = await TgClient.user.send_message(
-                        chat_id=self._listener.message.chat.id,
-                        text="Preparing upload...",
-                        disable_notification=True,
-                    )
+                # sent_msg потрібен як reference — беремо з dump channel
+                # Поки немає повідомлень, ставимо None — заповниться після першого аплоуду
+                self._sent_msg = None
             else:
+                # Без user session — бот завантажує в dump channel (2 GiB)
                 self._sent_msg = self._listener.message
-            self._up_chat_id = self._listener.message.chat.id
-            self._up_thread_id = getattr(self._listener.message, "message_thread_id", None)
         elif self._user_session:
             self._sent_msg = await TgClient.user.get_messages(
                 chat_id=self._listener.message.chat.id, message_ids=self._listener.mid
@@ -134,9 +127,19 @@ class TelegramUploader:
         return True
 
     async def _send_file_direct(self, method, **kwargs):
-        """Відправка файлу напряму в чат без прив'язки до попереднього повідомлення."""
-        client = TgClient.user if self._user_session else self._listener.client
-        return await getattr(client, method)(
+        """Відправка файлу. Якщо user session не може — fallback на бота."""
+        if self._user_session and TgClient.user:
+            try:
+                return await getattr(TgClient.user, method)(
+                    chat_id=self._up_chat_id,
+                    message_thread_id=self._up_thread_id,
+                    disable_notification=True,
+                    **kwargs
+                )
+            except Exception as e:
+                LOGGER.warning(f"User session failed ({e}), falling back to bot client")
+                self._user_session = False
+        return await getattr(self._listener.client, method)(
             chat_id=self._up_chat_id,
             message_thread_id=self._up_thread_id,
             disable_notification=True,
@@ -293,16 +296,12 @@ class TelegramUploader:
                     if self._listener.is_cancelled:
                         return
                     if not self._is_corrupted and self._sent_msg is not None:
-                        if (
-                            self._listener.is_super_chat or (
-                                self._listener.up_dest
-                                and self._listener.up_dest != self._listener.user_id
-                            )
-                        ) and not self._is_private:
-                            # Зберігаємо посилання тільки для дамп-каналу
+                        if self._is_private:
+                            # Для PM-режиму — файл вже скопійовано в PM, зберігаємо ім'я
+                            self._msgs_dict[str(self._sent_msg.id)] = file_
+                        elif self._listener.is_super_chat:
                             self._msgs_dict[self._sent_msg.link] = file_
                         else:
-                            # Для PM — просто зберігаємо ім'я файлу
                             self._msgs_dict[str(self._sent_msg.id)] = file_
                     await sleep(1)
                 except Exception as err:
@@ -459,6 +458,7 @@ class TelegramUploader:
             if (
                 not self._listener.is_cancelled
                 and self._media_group
+                and self._sent_msg is not None
                 and (self._sent_msg.video or self._sent_msg.document)
             ):
                 key = "documents" if self._sent_msg.document else "videos"
@@ -484,18 +484,18 @@ class TelegramUploader:
                 and await aiopath.exists(thumb)
             ):
                 await remove(thumb)
-            # Тихий бекап у дамп-канал (без повідомлень користувачу)
-            if self._dump_chat_id and self._sent_msg:
+            # Копіюємо з dump channel в PM юзера БЕЗ "Переслано від"
+            if self._is_private and self._sent_msg:
                 try:
                     client = TgClient.user if self._user_session else self._listener.client
-                    await client.forward_messages(
-                        chat_id=self._dump_chat_id,
+                    await client.copy_message(
+                        chat_id=self._listener.user_id,
                         from_chat_id=self._sent_msg.chat.id,
-                        message_ids=self._sent_msg.id,
+                        message_id=self._sent_msg.id,
                         disable_notification=True,
                     )
-                except Exception as _fe:
-                    LOGGER.debug(f"Dump backup forward failed (non-fatal): {_fe}")
+                except Exception as _ce:
+                    LOGGER.warning(f"Copy to PM failed: {_ce}")
 
         except (FloodWait, FloodPremiumWait) as f:
             LOGGER.warning(str(f))
