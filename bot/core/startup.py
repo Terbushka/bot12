@@ -204,7 +204,7 @@ async def update_variables():
         Config.HYBRID_LEECH = True
         LOGGER.info(
             "Premium user session detected: USER_TRANSMISSION=True, HYBRID_LEECH=True, "
-            f"MAX_SPLIT_SIZE={TgClient.MAX_SPLIT_SIZE // 1024**3} GiB"
+            f"MAX_SPLIT_SIZE={TgClient.MAX_SPLIT_SIZE // (1024**2)} MiB"
         )
     else:
         Config.HYBRID_LEECH = bool(Config.HYBRID_LEECH)

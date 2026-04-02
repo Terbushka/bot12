@@ -58,10 +58,10 @@ class TgClient:
                 await cls.user.start()
                 cls.IS_PREMIUM_USER = cls.user.me.is_premium
                 if cls.IS_PREMIUM_USER:
-                    cls.MAX_SPLIT_SIZE = 4294967296  # 4 GiB — Telegram Premium upload limit
+                    cls.MAX_SPLIT_SIZE = 4194304000  # 4000 MiB — реальний ліміт Telegram Premium
                     LOGGER.info(
                         f"User session started | Account: {cls.user.me.first_name} "
-                        f"| Premium: YES | MAX_SPLIT_SIZE: 4 GiB"
+                        f"| Premium: YES | MAX_SPLIT_SIZE: 4000 MiB"
                     )
                 else:
                     LOGGER.warning(
