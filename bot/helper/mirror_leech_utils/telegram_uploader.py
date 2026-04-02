@@ -95,19 +95,13 @@ class TelegramUploader:
         if self._listener.up_dest:
             self._is_private = True
             self._dump_chat_id = self._listener.up_dest
-            # Аплоуд іде НАПРЯМУ в dump channel (supergroup/channel)
-            # через user session → 4 GiB ліміт.
-            # Після аплоуду — copy_message в PM юзера (без "Переслано від").
+            # Аплоуд іде напряму в dump channel через user session (4 GiB).
+            # Потім copy_message в PM юзера без "Переслано від".
             self._up_chat_id = self._dump_chat_id
             self._up_thread_id = None
             if TgClient.user:
                 self._user_session = True
-                # sent_msg потрібен як reference — беремо з dump channel
-                # Поки немає повідомлень, ставимо None — заповниться після першого аплоуду
-                self._sent_msg = None
-            else:
-                # Без user session — бот завантажує в dump channel (2 GiB)
-                self._sent_msg = self._listener.message
+            self._sent_msg = None  # заповниться після першого аплоуду
         elif self._user_session:
             self._sent_msg = await TgClient.user.get_messages(
                 chat_id=self._listener.message.chat.id, message_ids=self._listener.mid
@@ -127,19 +121,9 @@ class TelegramUploader:
         return True
 
     async def _send_file_direct(self, method, **kwargs):
-        """Відправка файлу. Якщо user session не може — fallback на бота."""
-        if self._user_session and TgClient.user:
-            try:
-                return await getattr(TgClient.user, method)(
-                    chat_id=self._up_chat_id,
-                    message_thread_id=self._up_thread_id,
-                    disable_notification=True,
-                    **kwargs
-                )
-            except Exception as e:
-                LOGGER.warning(f"User session failed ({e}), falling back to bot client")
-                self._user_session = False
-        return await getattr(self._listener.client, method)(
+        """Відправка файлу напряму в чат без прив'язки до попереднього повідомлення."""
+        client = TgClient.user if self._user_session else self._listener.client
+        return await getattr(client, method)(
             chat_id=self._up_chat_id,
             message_thread_id=self._up_thread_id,
             disable_notification=True,
@@ -297,7 +281,6 @@ class TelegramUploader:
                         return
                     if not self._is_corrupted and self._sent_msg is not None:
                         if self._is_private:
-                            # Для PM-режиму — файл вже скопійовано в PM, зберігаємо ім'я
                             self._msgs_dict[str(self._sent_msg.id)] = file_
                         elif self._listener.is_super_chat:
                             self._msgs_dict[self._sent_msg.link] = file_
@@ -305,7 +288,7 @@ class TelegramUploader:
                             self._msgs_dict[str(self._sent_msg.id)] = file_
                     await sleep(1)
                 except Exception as err:
-                    self._is_corrupted = True  # гарантуємо що corrupted=True при будь-якому exception
+                    self._is_corrupted = True
                     if isinstance(err, RetryError):
                         LOGGER.info(
                             f"Total Attempts: {err.last_attempt.attempt_number}"
@@ -484,16 +467,19 @@ class TelegramUploader:
                 and await aiopath.exists(thumb)
             ):
                 await remove(thumb)
-            # Копіюємо з dump channel в PM юзера БЕЗ "Переслано від"
+            # Копіюємо в PM юзера БЕЗ "Переслано від".
+            # Саме БОТ робить copy — він може писати будь-якому хто написав /start.
+            # User session не може писати в чужий PM без попереднього діалогу.
             if self._is_private and self._sent_msg:
                 try:
-                    client = TgClient.user if self._user_session else self._listener.client
-                    await client.copy_message(
+                    LOGGER.info(f"Copying to PM user_id={self._listener.user_id}")
+                    await self._listener.client.copy_message(
                         chat_id=self._listener.user_id,
                         from_chat_id=self._sent_msg.chat.id,
                         message_id=self._sent_msg.id,
                         disable_notification=True,
                     )
+                    LOGGER.info("Copy to PM successful")
                 except Exception as _ce:
                     LOGGER.warning(f"Copy to PM failed: {_ce}")
 
